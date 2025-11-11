@@ -177,8 +177,15 @@ class RetrievalService:
         
         # initialize BGE reranker if requested
         if reranker_model_name:
-            self.reranker_tokenizer = AutoTokenizer.from_pretrained(reranker_model_name)
-            self.reranker_model = AutoModelForSequenceClassification.from_pretrained(reranker_model_name)
+            # Use local_files_only to prevent re-downloading in production
+            self.reranker_tokenizer = AutoTokenizer.from_pretrained(
+                reranker_model_name, 
+                local_files_only=True
+            )
+            self.reranker_model = AutoModelForSequenceClassification.from_pretrained(
+                reranker_model_name,
+                local_files_only=True
+            )
             logger.info(f"Loaded BGE re-ranker model: {reranker_model_name}")
         else:
             self.reranker_tokenizer = None
