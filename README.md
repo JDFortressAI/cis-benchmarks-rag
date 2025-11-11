@@ -1,6 +1,6 @@
 # 🔍 RAG-Lite: Smart Document Q&A
 
-A lightweight but powerful implementation of Retrieval Augmented Generation (RAG) with hierarchical document chunking and evidence-based responses. CIS Benchmarks PDF files as corpus (for demo purposes).
+A lightweight but powerful implementation of Retrieval Augmented Generation (RAG) with hierarchical document chunking and evidence-based responses. CIS Benchmarks PDF files as corpus (for demo purposes). Powered by JDFortCore secret sauce.
 
 ## ✨ Key Features
 
