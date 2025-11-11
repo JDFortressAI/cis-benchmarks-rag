@@ -1,0 +1,60 @@
+{
+  "family": "cis-task",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "1024",
+  "memory": "4096",
+  "executionRoleArn": "arn:aws:iam::530256939177:role/ecsTaskExecutionRole",
+  "taskRoleArn": "arn:aws:iam::530256939177:role/ecsTaskRole",
+  "containerDefinitions": [
+    {
+      "name": "cis-container",
+      "image": "530256939177.dkr.ecr.eu-central-1.amazonaws.com/demo/cis-app:latest",
+      "portMappings": [
+        {
+          "containerPort": 8501,
+          "hostPort": 8501,
+          "protocol": "tcp"
+        }
+      ],
+      "essential": true,
+      "secrets": [
+        {
+          "name": "AWS_ACCESS_KEY_ID",
+          "valueFrom": "arn:aws:secretsmanager:eu-central-1:530256939177:secret:cis-secrets-complete:AWS_ACCESS_KEY_ID::"
+        },
+        {
+          "name": "AWS_SECRET_ACCESS_KEY",
+          "valueFrom": "arn:aws:secretsmanager:eu-central-1:530256939177:secret:cis-secrets-complete:AWS_SECRET_ACCESS_KEY::"
+        },
+        {
+          "name": "OPENAI_API_KEY",
+          "valueFrom": "arn:aws:secretsmanager:eu-central-1:530256939177:secret:cis-secrets-complete:OPENAI_API_KEY::"
+        },
+        {
+          "name": "DEMO_USERNAME",
+          "valueFrom": "arn:aws:secretsmanager:eu-central-1:530256939177:secret:cis-secrets-complete:DEMO_USERNAME::"
+        },
+        {
+          "name": "DEMO_PASSWORD",
+          "valueFrom": "arn:aws:secretsmanager:eu-central-1:530256939177:secret:cis-secrets-complete:DEMO_PASSWORD::"
+        }
+      ],
+      "environment": [
+        {
+          "name": "AWS_REGION",
+          "value": "eu-central-1"
+        }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/cis-task",
+          "awslogs-region": "eu-central-1",
+          "awslogs-stream-prefix": "cis",
+          "awslogs-create-group": "true"
+        }
+      }
+    }
+  ]
+}

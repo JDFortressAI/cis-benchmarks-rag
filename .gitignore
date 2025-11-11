@@ -8,3 +8,7 @@ temp/
 src/__pycache__/
 task-def.json
 my-creds.json
+setup-cicd.sh
+update-secrets.sh
+complete-setup.sh
+aws_info.md
