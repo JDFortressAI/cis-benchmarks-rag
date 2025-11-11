@@ -177,16 +177,16 @@ class RetrievalService:
         
         # initialize BGE reranker if requested
         if reranker_model_name:
-            # Use local_files_only to prevent re-downloading in production
+            # Use local_files_only since model is pre-downloaded in Docker image
             self.reranker_tokenizer = AutoTokenizer.from_pretrained(
-                reranker_model_name, 
+                reranker_model_name,
                 local_files_only=True
             )
             self.reranker_model = AutoModelForSequenceClassification.from_pretrained(
                 reranker_model_name,
                 local_files_only=True
             )
-            logger.info(f"Loaded BGE re-ranker model: {reranker_model_name}")
+            logger.info(f"Loaded BGE re-ranker model from cache: {reranker_model_name}")
         else:
             self.reranker_tokenizer = None
             self.reranker_model = None
