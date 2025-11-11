@@ -12,3 +12,4 @@ setup-cicd.sh
 update-secrets.sh
 complete-setup.sh
 aws_info.md
+cleanup-ecr.sh
