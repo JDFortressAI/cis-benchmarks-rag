@@ -161,11 +161,12 @@ def setup_sidebar() -> tuple[int, float]:
     return top_k, similarity_threshold
 
 
-def process_user_query(user_input: str, top_k: int, similarity_threshold: float) -> None:
+def process_user_query(user_input: str, top_k: int, similarity_threshold: float) -> str:
     """Process user query and update chat history."""
     pt = ProcessTimer()
     
     with st.spinner("Generating response..."):
+
         current_config = ProcessorConfig(
             retrieval=RetrievalConfig(
                 top_k=top_k,
@@ -185,16 +186,7 @@ def process_user_query(user_input: str, top_k: int, similarity_threshold: float)
         response = processor.process_query(user_input)
         pt.mark("RAG Processing Query")
         
-        st.session_state.chat_history.append({"user": user_input, "bot": response})
-
-
-def display_chat_history() -> None:
-    """Display the chat history."""
-    for exchange in st.session_state.chat_history:
-        with st.chat_message("user"):
-            st.markdown(exchange["user"])
-        with st.chat_message("assistant"):
-            st.markdown(exchange["bot"])
+        return response
 
 
 def display_footer() -> None:
@@ -250,6 +242,11 @@ def main() -> None:
     if "chat_history" not in st.session_state:
         st.session_state.chat_history = []
     
+    # Display chat history
+    for message in st.session_state.chat_history:
+        with st.chat_message(message["role"]):
+            st.markdown(message["content"])
+
     # Initialize services (only once)
     if "base_services" not in st.session_state:
         st.session_state.base_services = initialize_services(config)
@@ -257,20 +254,20 @@ def main() -> None:
     # Setup sidebar controls
     top_k, similarity_threshold = setup_sidebar()
     
-    # Handle selected question from sidebar
-    if "selected_question" in st.session_state:
-        selected_question = st.session_state.selected_question
-        del st.session_state.selected_question  # Clear after use
-        if config["api_key"]:
-            process_user_query(selected_question, top_k, similarity_threshold)
-    
     # Handle user input
     user_input = st.chat_input("Ask a question...")
-    if user_input and config["api_key"]:
-        process_user_query(user_input, top_k, similarity_threshold)
-    
-    # Display chat history
-    display_chat_history()
+    if user_input or "selected_question" in st.session_state:
+        if "selected_question" in st.session_state:
+            user_input = st.session_state.selected_question
+            del st.session_state.selected_question  # Clear after use
+        st.session_state.chat_history.append({"role": "user", "content": user_input})
+        with st.chat_message("user"):
+            st.markdown(user_input)
+        with st.chat_message("assistant"):
+            response = process_user_query(user_input, top_k, similarity_threshold)
+            st.markdown(response)
+        st.session_state.chat_history.append({"role": "assistant", "content": response})
+        
     
     # Display footer
     display_footer()
