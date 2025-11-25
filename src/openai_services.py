@@ -1,17 +1,18 @@
 from openai import OpenAI
 from typing import List, Protocol, Dict
 from logger import logger
+import asyncio
 
 # === Embedding Service Protocol ===
 
 class EmbeddingService(Protocol):
-    def embed_text(self, text: str) -> List[float]:
+    async def embed_text(self, text: str) -> List[float]:
         ...
 
 # === Generation Service Protocol ===
 
 class GenerationService(Protocol):
-    def generate_response(self, augmented_prompt: str) -> str:
+    async def generate_response(self, augmented_prompt: str) -> str:
         ...
 
 # === OpenAI Implementation ===
@@ -22,14 +23,15 @@ class OpenAIEmbeddingService:
         self.model = model
         logger.info("Initialized OpenAIEmbeddingService with model: %s", model)
 
-    def embed_text(self, text: str) -> List[float]:
+    async def embed_text(self, text: str) -> List[float]:
         if not text.strip():
             raise ValueError("Cannot embed empty text.")
 
         estimated_tokens = len(text) // 4
         logger.debug("Embedding text with ~%d tokens", estimated_tokens)
         
-        response = self.client.embeddings.create(
+        response = await asyncio.to_thread(
+            self.client.embeddings.create,
             input=text,
             model=self.model
         )
@@ -46,7 +48,7 @@ class OpenAIGenerationService:
         ]
         logger.info("Initialized OpenAIGenerationService with model: %s", model)
 
-    def generate_response(self, augmented_prompt: str) -> str:
+    async def generate_response(self, augmented_prompt: str) -> str:
         if not augmented_prompt.strip():
             raise ValueError("Prompt cannot be empty.")
 
@@ -56,7 +58,8 @@ class OpenAIGenerationService:
 
         self.chat_memory.append({"role": "user", "content": augmented_prompt})
 
-        response = self.client.chat.completions.create(
+        response = await asyncio.to_thread(
+            self.client.chat.completions.create,
             model=self.model,
             messages=self.chat_memory,
         )

@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import List, Protocol, Optional, Dict
+from typing import List, Protocol, Optional, Dict, Any
 from datetime import datetime
 import json
 from boto3 import client
@@ -8,6 +8,8 @@ import torch
 from logger import logger
 from helpers import load_config
 from log_time import log_time
+import streamlit as st
+import asyncio
 
 # === Data Classes ===
 
@@ -93,6 +95,29 @@ class SimilarityMetric(Protocol):
 class GenerationService(Protocol):
     def generate_response(self, augmented_prompt: str) -> str:
         ...
+
+# === For Progress ===
+
+class ProgressCallback(Protocol):
+    def update(self, message: str, **kwargs: Any) -> None: ...
+    def write(self, message: str) -> None: ...
+    def __call__(self, message: str, **kwargs: Any) -> None: ...
+
+class StreamlitProgress:
+    def __init__(self, status: st.status):
+        self.status = status
+
+    def __call__(self, message: str, **kwargs: Any) -> None:
+        self.status.update(label=message, **kwargs)
+
+    def write(self, message: str) -> None:
+        self.status.write(message)
+
+# For non-Streamlit environments (tests, CLI)
+class NoOpProgress:
+    def __call__(self, message: str, **kwargs: Any) -> None: pass
+    def write(self, message: str) -> None: pass  
+
 
 # === Core Corpus ===
 
@@ -192,7 +217,7 @@ class RetrievalService:
             self.reranker_model = None
 
     @log_time("rerank_with_bge")
-    def rerank_with_bge(
+    async def rerank_with_bge(
         self,
         query_text: str,
         retrieved_chunks: List[RetrievedChunk],
@@ -207,18 +232,21 @@ class RetrievalService:
         
         pairs = [(query_text, rc.chunk.content) for rc in retrieved_chunks]
         
-        inputs = self.reranker_tokenizer(
-            [q for q, c in pairs],
-            [c for q, c in pairs],
-            return_tensors="pt",
-            truncation=True,
-            padding=True
-        )
-        
-        with torch.no_grad():
-            outputs = self.reranker_model(**inputs)
-            scores = outputs.logits.squeeze(-1)
-        
+        def _run_reranker():
+            inputs = self.reranker_tokenizer(
+                [q for q, c in pairs],
+                [c for q, c in pairs],
+                return_tensors="pt",
+                truncation=True,
+                padding=True
+            )
+            
+            with torch.no_grad():
+                outputs = self.reranker_model(**inputs)
+                scores = outputs.logits.squeeze(-1)
+            return scores
+
+        scores = await asyncio.to_thread(_run_reranker)        
         # rank the retrieved chunks by BGE re-ranker scores
         sorted_indices = torch.topk(scores, k=min(top_n, len(retrieved_chunks))).indices.tolist()
         
@@ -234,14 +262,15 @@ class RetrievalService:
         return reranked_chunks
 
     @log_time("retrieve_similar_chunks")
-    def retrieve_similar_chunks(
+    async def retrieve_similar_chunks(
         self, query: Query, config: RetrievalConfig
     ) -> List[RetrievedChunk]:
         """
         Retrieve chunks similar to the query based on the config.
         Returns list of chunks sorted by similarity score.
         """
-        resp = self.vector_client.query_vectors(
+        resp = await asyncio.to_thread(
+            self.vector_client.query_vectors,
             vectorBucketName=load_config("VECTOR_S3_BUCKET"),
             indexName=load_config("VECTOR_INDEX"),
             queryVector={'float32':query.embedding},
@@ -266,16 +295,21 @@ class RetrievalService:
 
         # 3) Load JSON files once per doc_hash
         chunks_store = {}
-        for doc_hash, id_list in docs_to_ids.items():
+        async def fetch_doc(doc_hash: str, id_list: list):
             key = f"{self.chunks_prefix}{doc_hash}.json"
-            obj = self.s3_client.get_object(Bucket=self.raw_bucket, Key=key)
+            obj = await asyncio.to_thread(
+                self.s3_client.get_object,
+                Bucket=self.raw_bucket, Key=key)
             raw = obj["Body"].read().decode("utf-8")
-            all_entries = json.loads(raw)  
-
-            # Index only requested chunks
-            for entry in all_entries:
+            entries = json.loads(raw)
+            for entry in entries:
                 if entry["chunk_id"] in id_list:
                     chunks_store[entry["chunk_id"]] = entry
+
+        await asyncio.gather(*[
+            fetch_doc(doc_hash, ids)
+            for doc_hash, ids in docs_to_ids.items()
+        ])
 
         # 4) Build RetrievedChunk list
         results = []
@@ -314,7 +348,7 @@ class RetrievalService:
 
         if self.reranker_model and len(results) > 1:
             logger.info(f"Reranking {len(results)} chunks using {self.reranker_model}..")
-            results = self.rerank_with_bge(query.text, results)
+            results = await self.rerank_with_bge(query.text, results)
 
         return results
 
@@ -378,42 +412,61 @@ class QueryProcessor:
         self.config = config
         logger.info("Initialized QueryProcessor with config: %s", config)
 
-    def pre_gen_process(self, query_text: str) -> str:
+    async def pre_gen_process(
+        self, 
+        query_text: str,
+        progress: Optional[ProgressCallback] = None,
+        ) -> str:
         """
         Process a query through the RAG pipeline until the generation.
         Returns augmented response.
         """
+        progress = progress or NoOpProgress()
+
         if not query_text.strip():
             raise ValueError("Query text cannot be empty")
 
         logger.info("Processing query: %s", query_text)
-        query_embedding = self.embedding_service.embed_text(query_text)
+        progress("Embedding your question...")
+        query_embedding = await self.embedding_service.embed_text(query_text)
+
+        progress("Searching the vector database for relevant chunks...")
         query = Query(text=query_text, embedding=query_embedding)
 
-        retrieved_chunks = self.retrieval_service.retrieve_similar_chunks(
+        retrieved_chunks = await self.retrieval_service.retrieve_similar_chunks(
             query, self.config.retrieval
         )
         if retrieved_chunks:
+            progress("Re-ranking and filtering the best matches...")
             augmented_prompt = self.prompt_augmenter.augment_query(query, retrieved_chunks)
         else:
             augmented_prompt = query_text
         logger.info("Augmented prompt: %s", augmented_prompt)
         return augmented_prompt
 
-    def process_query(self, query_text: str) -> str:
+    async def process_query(
+        self, 
+        query_text: str,
+        progress: Optional[ProgressCallback] = None,
+        ) -> str:
         """
         Process a query through the RAG pipeline after retrieval.
         Returns generated response.
         """
-        augmented_prompt = self.pre_gen_process(query_text)
+        progress = progress or NoOpProgress()
+
+        augmented_prompt = await self.pre_gen_process(query_text)
         if augmented_prompt == query_text:
+            progress("No relevant documents found → generating a fun fact...")
             response = "You query is unrelated to the subject in corpus. "
             response += "😊 Would you like to make another query?\n\n\n\n"
             response += "💡 Did You Know? 💡\n\n"
             didyouknowprompt = f"Generate a random and fun and insightful did-you-know factoid about CIS Benchmarks in less than 30 words. If possible, make it relevant to the user query here: ***{query_text}***; it can even be technical if relevant to user query. Just give the factoid, nothing else. (no preamble etc)"
-            response += self.generation_service.generate_response(didyouknowprompt) 
+            response += await self.generation_service.generate_response(didyouknowprompt) 
         else:
-            response = self.generation_service.generate_response(augmented_prompt)
+            progress("Generating final answer with retrieved context...")
+            response = await self.generation_service.generate_response(augmented_prompt)
         logger.info("Query processing completed")
         logger.info("Response: %s", response)
+        progress("Finalizing response...", state="complete")
         return response

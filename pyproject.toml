@@ -16,4 +16,5 @@ dependencies = [
   "faiss-cpu>=1.10.0",
   "html2text",
   "humanfriendly",
+  "nest-asyncio>=1.6.0",
 ]

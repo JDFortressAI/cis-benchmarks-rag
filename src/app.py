@@ -7,28 +7,34 @@ CIS Benchmarks using AWS S3 Vectors and OpenAI GPT models.
 
 import os
 from hashlib import sha256
-from typing import Dict, Any
+from typing import Dict, Any, Protocol
 
 import streamlit as st
 import boto3
 from dotenv import load_dotenv
+import asyncio
 
 from openai_services import OpenAIEmbeddingService, OpenAIGenerationService
 from rag_pipeline import (
     RetrievalService, PromptAugmenter, QueryProcessor,
-    ProcessorConfig, RetrievalConfig, CosineSimilarity
+    ProcessorConfig, RetrievalConfig, CosineSimilarity,
+    StreamlitProgress,
 )
 from log_time import ProcessTimer
 from helpers import load_config
+import nest_asyncio
 
+nest_asyncio.apply()
 
-def setup_page_config() -> None:
-    """Configure Streamlit page settings and branding."""
-    st.set_page_config(
-        page_title="CIS Benchmarks Retrieval", 
+st.set_page_config(
+        page_title="FortiCIS", 
         layout="wide",
         initial_sidebar_state="expanded"
     )
+  
+
+def setup_page_config() -> None:
+    """Configure Streamlit page settings and branding."""
     
     # Set up branding
     jd_logo = "images/jd-logo.png"
@@ -161,32 +167,30 @@ def setup_sidebar() -> tuple[int, float]:
     return top_k, similarity_threshold
 
 
-def process_user_query(user_input: str, top_k: int, similarity_threshold: float) -> str:
+async def process_user_query(user_input: str, top_k: int, similarity_threshold: float) -> str:
     """Process user query and update chat history."""
-    pt = ProcessTimer()
     
-    with st.spinner("Generating response..."):
-
-        current_config = ProcessorConfig(
-            retrieval=RetrievalConfig(
-                top_k=top_k,
-                similarity_threshold=similarity_threshold
-            )
-        )
-        
-        processor = QueryProcessor(
+    current_config = ProcessorConfig(
+                            retrieval=RetrievalConfig(
+                            top_k=top_k,
+                            similarity_threshold=similarity_threshold
+                            )
+                        )
+    processor = QueryProcessor(
             embedding_service=st.session_state.base_services["embedding_service"],
             retrieval_service=st.session_state.base_services["retrieval_service"],
             prompt_augmenter=st.session_state.base_services["augmenter"],
             generation_service=st.session_state.base_services["generation_service"],
             config=current_config
-        )
-        
-        pt.mark("RAG Processing Query")
-        response = processor.process_query(user_input)
-        pt.mark("RAG Processing Query")
-        
-        return response
+                        )
+
+    with st.status("Generating response...", expanded=True) as status:
+        progress = StreamlitProgress(status)
+        progress.write("Starting RAG pipeline...")
+
+        response = await processor.process_query(user_input, progress)
+
+    return response
 
 
 def display_footer() -> None:
@@ -226,52 +230,55 @@ def display_footer() -> None:
         unsafe_allow_html=True
     )
 
+# Setup page configuration
+setup_page_config()
 
-def main() -> None:
-    """Main application function."""
-    # Setup page configuration
-    setup_page_config()
-    
-    # Load environment configuration
-    config = load_environment_config()
-    
-    # Check authentication
-    check_authentication(config["demo_username"], config["demo_password"])
-    
-    # Initialize session state
-    if "chat_history" not in st.session_state:
-        st.session_state.chat_history = []
-    
-    # Display chat history
-    for message in st.session_state.chat_history:
-        with st.chat_message(message["role"]):
-            st.markdown(message["content"])
+# Load environment configuration
+config = load_environment_config()
 
-    # Initialize services (only once)
-    if "base_services" not in st.session_state:
-        st.session_state.base_services = initialize_services(config)
-    
-    # Setup sidebar controls
-    top_k, similarity_threshold = setup_sidebar()
-    
-    # Handle user input
-    user_input = st.chat_input("Ask a question...")
-    if user_input or "selected_question" in st.session_state:
-        if "selected_question" in st.session_state:
-            user_input = st.session_state.selected_question
-            del st.session_state.selected_question  # Clear after use
-        st.session_state.chat_history.append({"role": "user", "content": user_input})
-        with st.chat_message("user"):
-            st.markdown(user_input)
-        with st.chat_message("assistant"):
-            response = process_user_query(user_input, top_k, similarity_threshold)
-            st.markdown(response)
-        st.session_state.chat_history.append({"role": "assistant", "content": response})
-        
-    
-    # Display footer
-    display_footer()
+# Check authentication
+check_authentication(config["demo_username"], config["demo_password"])
+
+# Initialize session state
+if "chat_history" not in st.session_state:
+    st.session_state.chat_history = []
+
+# Display chat history
+for message in st.session_state.chat_history:
+    with st.chat_message(message["role"]):
+        st.markdown(message["content"])
+
+# Initialize services (only once)
+if "base_services" not in st.session_state:
+    st.session_state.base_services = initialize_services(config)
+
+# Setup sidebar controls
+top_k, similarity_threshold = setup_sidebar()
+
+async def generate_response(user_input):
+    with st.chat_message("assistant"):
+        response = await process_user_query(user_input, top_k, similarity_threshold)
+        st.markdown(response)
+    st.session_state.chat_history.append({"role": "assistant", "content": response})
 
 
-if __name__ == "__main__":
-    main()
+# Handle user input
+user_input = st.chat_input("Ask a question...")
+if user_input or "selected_question" in st.session_state:
+    if "selected_question" in st.session_state:
+        user_input = st.session_state.selected_question
+        del st.session_state.selected_question  # Clear after use
+
+    with st.chat_message("user"):
+        st.markdown(user_input)
+    st.session_state.chat_history.append({"role": "user", "content": user_input})
+
+    loop = asyncio.get_event_loop()
+    
+    response_task = loop.run_until_complete(generate_response(user_input))
+    
+    
+
+# Display footer
+display_footer()
+
